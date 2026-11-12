@@ -1,20 +1,8 @@
 import Link from "next/link";
+import { formatEditDate } from "@/lib/format";
 import { getMeta, listStandings } from "@/lib/league";
 
 export const dynamic = "force-dynamic";
-
-function formatEditDate(iso: string | undefined): string {
-  const date = iso ? new Date(iso) : null;
-  if (!date || Number.isNaN(date.getTime())) return "none yet";
-  return date.toLocaleString("en-GB", {
-    timeZone: "Europe/London",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export default async function HomePage() {
   const [standings, meta] = await Promise.all([listStandings(), getMeta()]);

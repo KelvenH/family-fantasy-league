@@ -11,6 +11,7 @@ import {
 type Props = {
   children: ReactNode;
   title?: string;
+  description?: string;
   /** Shown while locked so pages can stay readable without a PIN. */
   lockedFallback?: ReactNode;
 };
@@ -23,6 +24,7 @@ type AuthState = {
 export function EditUnlock({
   children,
   title = "Enter the family PIN to edit",
+  description = "Viewing stays open. Edits need the shared family PIN — no email or account.",
   lockedFallback,
 }: Props) {
   const [auth, setAuth] = useState<AuthState | null>(null);
@@ -99,10 +101,7 @@ export function EditUnlock({
         {lockedFallback}
         <div className="pin-gate">
           <h2 className="pin-title">{title}</h2>
-          <p className="lede">
-            Viewing stays open. Edits need the shared family PIN — no email or
-            account.
-          </p>
+          <p className="lede">{description}</p>
           {!auth.configured ? (
             <p className="waiting">
               Editing is not set up yet. Add a 6–8 digit EDIT_PIN in Cursor
