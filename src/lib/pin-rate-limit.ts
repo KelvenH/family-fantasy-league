@@ -1,81 +1,94 @@
-type Bucket = {
-  failures: number;
-  windowStart: number;
-  lockedUntil: number;
-};
+import { sql } from "@/lib/db";
 
+const LOCKOUT_ID = "global";
 const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 15 * 60 * 1000;
 const LOCKOUT_MS = 15 * 60 * 1000;
 
-const buckets = new Map<string, Bucket>();
-
-function now(): number {
-  return Date.now();
+/**
+ * Global PIN attempt lockout (not keyed on client IP / X-Forwarded-For).
+ * One fixed DB row — no per-visitor map that attackers can grow.
+ */
+async function ensureLockoutRow(): Promise<void> {
+  await sql(
+    `insert into pin_lockout (id, failures, window_start, locked_until)
+     values ($1, 0, now(), null)
+     on conflict (id) do nothing`,
+    [LOCKOUT_ID],
+  );
 }
 
-function getBucket(key: string): Bucket {
-  const existing = buckets.get(key);
-  if (existing) return existing;
-  const created: Bucket = {
-    failures: 0,
-    windowStart: now(),
-    lockedUntil: 0,
-  };
-  buckets.set(key, created);
-  return created;
+type LockoutRow = {
+  failures: number;
+  window_start: string | Date;
+  locked_until: string | Date | null;
+};
+
+function asTime(value: string | Date | null | undefined): number {
+  if (!value) return 0;
+  return new Date(value).getTime();
 }
 
-export function clientAttemptKey(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) {
-    const first = forwarded.split(",")[0]?.trim();
-    if (first) return `ip:${first}`;
-  }
-  const realIp = request.headers.get("x-real-ip")?.trim();
-  if (realIp) return `ip:${realIp}`;
-  return "ip:unknown";
-}
-
-export function getPinLockout(
-  key: string,
-): { locked: true; retryAfterSec: number } | { locked: false } {
-  const bucket = getBucket(key);
-  const remaining = bucket.lockedUntil - now();
+export async function getPinLockout(): Promise<
+  { locked: true; retryAfterSec: number } | { locked: false }
+> {
+  await ensureLockoutRow();
+  const rows = await sql<LockoutRow>(
+    `select failures, window_start, locked_until from pin_lockout where id = $1`,
+    [LOCKOUT_ID],
+  );
+  const row = rows[0];
+  if (!row) return { locked: false };
+  const remaining = asTime(row.locked_until) - Date.now();
   if (remaining > 0) {
     return { locked: true, retryAfterSec: Math.ceil(remaining / 1000) };
   }
   return { locked: false };
 }
 
-export function recordPinFailure(key: string): {
+export async function recordPinFailure(): Promise<{
   locked: boolean;
   retryAfterSec: number;
   attemptCount: number;
-} {
-  const bucket = getBucket(key);
-  const t = now();
+}> {
+  await ensureLockoutRow();
+  const rows = await sql<LockoutRow>(
+    `select failures, window_start, locked_until from pin_lockout where id = $1`,
+    [LOCKOUT_ID],
+  );
+  const row = rows[0];
+  if (!row) {
+    return { locked: false, retryAfterSec: 0, attemptCount: 0 };
+  }
 
-  if (bucket.lockedUntil > t) {
+  const t = Date.now();
+  const lockedUntil = asTime(row.locked_until);
+  if (lockedUntil > t) {
     return {
       locked: true,
-      retryAfterSec: Math.ceil((bucket.lockedUntil - t) / 1000),
-      attemptCount: bucket.failures,
+      retryAfterSec: Math.ceil((lockedUntil - t) / 1000),
+      attemptCount: row.failures,
     };
   }
 
-  if (t - bucket.windowStart > WINDOW_MS) {
-    bucket.windowStart = t;
-    bucket.failures = 0;
+  let failures = row.failures;
+  let windowStart = asTime(row.window_start);
+  if (t - windowStart > WINDOW_MS) {
+    failures = 0;
+    windowStart = t;
   }
 
-  bucket.failures += 1;
-  const attemptCount = bucket.failures;
+  failures += 1;
+  const attemptCount = failures;
 
-  if (bucket.failures >= MAX_ATTEMPTS) {
-    bucket.lockedUntil = t + LOCKOUT_MS;
-    bucket.failures = 0;
-    bucket.windowStart = t;
+  if (failures >= MAX_ATTEMPTS) {
+    const nextLock = new Date(t + LOCKOUT_MS).toISOString();
+    await sql(
+      `update pin_lockout
+       set failures = 0, window_start = $2, locked_until = $3
+       where id = $1`,
+      [LOCKOUT_ID, new Date(t).toISOString(), nextLock],
+    );
     return {
       locked: true,
       retryAfterSec: Math.ceil(LOCKOUT_MS / 1000),
@@ -83,11 +96,24 @@ export function recordPinFailure(key: string): {
     };
   }
 
+  await sql(
+    `update pin_lockout
+     set failures = $2, window_start = $3, locked_until = null
+     where id = $1`,
+    [LOCKOUT_ID, failures, new Date(windowStart).toISOString()],
+  );
+
   return { locked: false, retryAfterSec: 0, attemptCount };
 }
 
-export function recordPinSuccess(key: string): void {
-  buckets.delete(key);
+export async function recordPinSuccess(): Promise<void> {
+  await ensureLockoutRow();
+  await sql(
+    `update pin_lockout
+     set failures = 0, window_start = now(), locked_until = null
+     where id = $1`,
+    [LOCKOUT_ID],
+  );
 }
 
 export function pinAttemptLimits() {

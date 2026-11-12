@@ -5,7 +5,7 @@ import { updatePlayerPts } from "@/lib/league";
 export const dynamic = "force-dynamic";
 
 export async function PATCH(request: Request) {
-  const authError = requireEditAuth(request);
+  const authError = await requireEditAuth(request);
   if (authError) return authError;
 
   try {

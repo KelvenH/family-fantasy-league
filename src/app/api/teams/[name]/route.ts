@@ -9,7 +9,7 @@ type Props = {
 };
 
 export async function PATCH(request: Request, { params }: Props) {
-  const authError = requireEditAuth(request);
+  const authError = await requireEditAuth(request);
   if (authError) return authError;
 
   try {

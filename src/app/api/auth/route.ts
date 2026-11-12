@@ -3,13 +3,14 @@ import {
   assertSameOrigin,
   buildAuthCookie,
   clearAuthCookie,
+  createEditSession,
   isEditUnlocked,
   pinConfigured,
   pinsMatch,
   requestIsSecure,
+  revokeEditSession,
 } from "@/lib/edit-auth";
 import {
-  clientAttemptKey,
   getPinLockout,
   recordPinFailure,
   recordPinSuccess,
@@ -19,7 +20,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   return NextResponse.json({
-    unlocked: isEditUnlocked(request),
+    unlocked: await isEditUnlocked(request),
     configured: pinConfigured(),
   });
 }
@@ -38,8 +39,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const attemptKey = clientAttemptKey(request);
-  const lockout = getPinLockout(attemptKey);
+  const lockout = await getPinLockout();
   if (lockout.locked) {
     return NextResponse.json(
       {
@@ -56,7 +56,7 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { pin?: unknown };
     if (!pinsMatch(body.pin)) {
-      const failure = recordPinFailure(attemptKey);
+      const failure = await recordPinFailure();
       if (failure.locked) {
         return NextResponse.json(
           {
@@ -79,21 +79,16 @@ export async function POST(request: Request) {
       );
     }
 
-    recordPinSuccess(attemptKey);
-
-    const cookie = buildAuthCookie(requestIsSecure(request));
-    if (!cookie) {
-      return NextResponse.json(
-        { error: "Editing is not configured yet" },
-        { status: 503 },
-      );
-    }
-
+    await recordPinSuccess();
+    const token = await createEditSession();
     const response = NextResponse.json({
       unlocked: true,
       configured: true,
     });
-    response.headers.set("set-cookie", cookie);
+    response.headers.set(
+      "set-cookie",
+      buildAuthCookie(token, requestIsSecure(request)),
+    );
     return response;
   } catch {
     return NextResponse.json({ error: "Could not unlock" }, { status: 400 });
@@ -104,6 +99,7 @@ export async function DELETE(request: Request) {
   const originError = assertSameOrigin(request);
   if (originError) return originError;
 
+  await revokeEditSession(request);
   const response = NextResponse.json({
     unlocked: false,
     configured: pinConfigured(),

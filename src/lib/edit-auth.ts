@@ -1,10 +1,11 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import { sql } from "@/lib/db";
 
 export const EDIT_COOKIE = "ff_edit";
-const TOKEN_PAYLOAD = "family-fantasy-edit-v1";
 /** Public apps need a longer PIN so online guessing is impractical with lockout. */
 export const PIN_PATTERN = /^\d{6,8}$/;
+const MAX_SESSIONS = 100;
 
 export function getExpectedPin(): string | null {
   const fromEnv = process.env.EDIT_PIN?.trim();
@@ -16,8 +17,8 @@ export function pinConfigured(): boolean {
   return getExpectedPin() !== null;
 }
 
-function tokenFor(pin: string): string {
-  return createHmac("sha256", pin).update(TOKEN_PAYLOAD).digest("hex");
+function hashToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
 export function requestIsSecure(request: Request): boolean {
@@ -27,31 +28,26 @@ export function requestIsSecure(request: Request): boolean {
   return proto?.split(",")[0]?.trim() === "https";
 }
 
-function cookieExtras(secure: boolean): string {
-  const parts = ["Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=2592000"];
-  if (secure) parts.push("Secure");
-  return parts.join("; ");
-}
-
-export function buildAuthCookie(secure: boolean): string | null {
-  const pin = getExpectedPin();
-  if (!pin) return null;
-  return `${EDIT_COOKIE}=${tokenFor(pin)}; ${cookieExtras(secure)}`;
-}
-
-export function clearAuthCookie(secure: boolean): string {
+function cookieExtras(secure: boolean, maxAgeSec: number): string {
   const parts = [
-    `${EDIT_COOKIE}=`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
-    "Max-Age=0",
+    `Max-Age=${maxAgeSec}`,
   ];
   if (secure) parts.push("Secure");
   return parts.join("; ");
 }
 
-function readCookie(request: Request, name: string): string | null {
+export function buildAuthCookie(token: string, secure: boolean): string {
+  return `${EDIT_COOKIE}=${token}; ${cookieExtras(secure, 30 * 24 * 60 * 60)}`;
+}
+
+export function clearAuthCookie(secure: boolean): string {
+  return `${EDIT_COOKIE}=; ${cookieExtras(secure, 0)}`;
+}
+
+export function readCookie(request: Request, name: string): string | null {
   const header = request.headers.get("cookie");
   if (!header) return null;
   for (const part of header.split(";")) {
@@ -61,15 +57,56 @@ function readCookie(request: Request, name: string): string | null {
   return null;
 }
 
-export function isEditUnlocked(request: Request): boolean {
-  const pin = getExpectedPin();
-  if (!pin) return false;
-  const value = readCookie(request, EDIT_COOKIE);
-  if (!value) return false;
-  const expected = Buffer.from(tokenFor(pin), "utf8");
-  const got = Buffer.from(value, "utf8");
-  if (expected.length !== got.length) return false;
-  return timingSafeEqual(expected, got);
+async function pruneSessions(): Promise<void> {
+  await sql(`delete from edit_sessions where expires_at < now()`);
+  const countRows = await sql<{ count: string }>(
+    `select count(*)::text as count from edit_sessions`,
+  );
+  const count = Number(countRows[0]?.count ?? 0);
+  if (count <= MAX_SESSIONS) return;
+  const overflow = count - MAX_SESSIONS;
+  await sql(
+    `delete from edit_sessions
+     where token_hash in (
+       select token_hash from edit_sessions
+       order by expires_at asc
+       limit $1
+     )`,
+    [overflow],
+  );
+}
+
+/** Opaque random session — not derived from the PIN (no offline PIN recovery). */
+export async function createEditSession(): Promise<string> {
+  await pruneSessions();
+  const token = randomBytes(32).toString("base64url");
+  await sql(
+    `insert into edit_sessions (token_hash, expires_at)
+     values ($1, now() + interval '30 days')`,
+    [hashToken(token)],
+  );
+  return token;
+}
+
+export async function revokeEditSession(request: Request): Promise<void> {
+  const token = readCookie(request, EDIT_COOKIE);
+  if (!token) return;
+  await sql(`delete from edit_sessions where token_hash = $1`, [
+    hashToken(token),
+  ]);
+}
+
+export async function isEditUnlocked(request: Request): Promise<boolean> {
+  if (!pinConfigured()) return false;
+  const token = readCookie(request, EDIT_COOKIE);
+  if (!token || !/^[A-Za-z0-9_-]{20,128}$/.test(token)) return false;
+  const rows = await sql<{ ok: number }>(
+    `select 1 as ok from edit_sessions
+     where token_hash = $1 and expires_at > now()
+     limit 1`,
+    [hashToken(token)],
+  );
+  return rows.length > 0;
 }
 
 export function pinsMatch(submitted: unknown): boolean {
@@ -99,7 +136,9 @@ export function assertSameOrigin(request: Request): Response | null {
   return null;
 }
 
-export function requireEditAuth(request: Request): Response | null {
+export async function requireEditAuth(
+  request: Request,
+): Promise<Response | null> {
   const originError = assertSameOrigin(request);
   if (originError) return originError;
   if (!pinConfigured()) {
@@ -108,7 +147,7 @@ export function requireEditAuth(request: Request): Response | null {
       { status: 503 },
     );
   }
-  if (isEditUnlocked(request)) return null;
+  if (await isEditUnlocked(request)) return null;
   return NextResponse.json(
     { error: "Enter the family PIN to edit" },
     { status: 401 },
