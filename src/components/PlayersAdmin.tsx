@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { EditUnlock } from "@/components/EditUnlock";
 import type { Player } from "@/lib/types";
 
 type Props = {
@@ -30,6 +31,7 @@ export function PlayersAdmin({ players: initial }: Props) {
       try {
         const res = await fetch("/api/players", {
           method: "PATCH",
+          credentials: "same-origin",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ playerId, pts }),
         });
@@ -57,7 +59,7 @@ export function PlayersAdmin({ players: initial }: Props) {
   }
 
   return (
-    <div>
+    <EditUnlock title="Enter the family PIN to change points">
       <p className="lede">
         Change a player&apos;s points, then tap Save. Team totals update from
         these points automatically.
@@ -113,6 +115,6 @@ export function PlayersAdmin({ players: initial }: Props) {
           </div>
         </div>
       ))}
-    </div>
+    </EditUnlock>
   );
 }

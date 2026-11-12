@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireEditAuth } from "@/lib/edit-auth";
 import { updateTeamSlot } from "@/lib/league";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +9,9 @@ type Props = {
 };
 
 export async function PATCH(request: Request, { params }: Props) {
+  const authError = await requireEditAuth(request);
+  if (authError) return authError;
+
   try {
     const { name: raw } = await params;
     const name = decodeURIComponent(raw);

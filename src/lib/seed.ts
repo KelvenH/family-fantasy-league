@@ -46,7 +46,7 @@ async function runSeed(): Promise<void> {
     return;
   }
 
-  const dataDir = path.join(process.cwd(), "data");
+  const dataDir = path.join(process.cwd(), "src", "seed-data");
   let players: SeedPlayer[];
   let teams: SeedTeam[];
   let meta: SeedMeta = {};

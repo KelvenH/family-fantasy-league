@@ -17,8 +17,8 @@ export default async function HomePage() {
 
       {waiting ? (
         <div className="waiting">
-          Waiting for league data… Place the export JSON files in the app{" "}
-          <code>data/</code> folder, then reload.
+          Waiting for league data… Place the export JSON files in{" "}
+          <code>src/seed-data/</code>, then reload.
         </div>
       ) : null}
 
