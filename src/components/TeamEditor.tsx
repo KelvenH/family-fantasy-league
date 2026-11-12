@@ -71,7 +71,7 @@ export function TeamEditor({ team, players }: Props) {
       </div>
 
       <EditUnlock
-        title="Enter the family PIN to change picks"
+        title="Enter the family password to change picks"
         lockedFallback={
           <div className="slot-list">
             {current.slots.map((slot) => (
@@ -85,7 +85,7 @@ export function TeamEditor({ team, players }: Props) {
                   <div className="slot-meta">
                     {slot.playerName
                       ? `${slot.club ?? ""} · ${slot.pts ?? 0} pts · £${(slot.price ?? 0).toFixed(1)}m`
-                      : "Unlock with the family PIN to change this pick"}
+                      : "Unlock with the family password to change this pick"}
                   </div>
                 </div>
               </div>

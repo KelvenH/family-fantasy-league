@@ -59,7 +59,7 @@ export function PlayersAdmin({ players: initial }: Props) {
   }
 
   return (
-    <EditUnlock title="Enter the family PIN to change points">
+    <EditUnlock title="Enter the family password to change points">
       <p className="lede">
         Change a player&apos;s points, then tap Save. Team totals update from
         these points automatically.

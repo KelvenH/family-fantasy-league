@@ -5,8 +5,8 @@ import {
   clearAuthCookie,
   createEditSession,
   isEditUnlocked,
+  passphrasesMatch,
   pinConfigured,
-  pinsMatch,
   requestIsSecure,
   revokeEditSession,
 } from "@/lib/edit-auth";
@@ -43,25 +43,26 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "Editing is not configured yet. Add a 6–8 digit EDIT_PIN in Cursor Secrets.",
+          "Editing is not configured yet. Set EDIT_PIN in Cursor Secrets to a 12+ character family password (letters plus a number or symbol).",
       },
       { status: 503 },
     );
   }
 
   try {
-    const body = (await request.json()) as { pin?: unknown };
-    const pinOk = pinsMatch(body.pin);
+    const body = (await request.json()) as { pin?: unknown; password?: unknown };
+    const submitted = body.password ?? body.pin;
+    const ok = passphrasesMatch(submitted);
 
     // Single transactional counter update — no separate lockout pre-check.
-    const result = await applyPinGuess(pinOk);
+    const result = await applyPinGuess(ok);
 
     if (result.status === "rejected") {
       await delay(result.delayMs);
       const retryAfterSec = Math.max(1, Math.ceil(result.delayMs / 1000));
       return NextResponse.json(
         {
-          error: "Wrong PIN. Try again.",
+          error: "Wrong family password. Try again.",
           attemptCount: result.attemptCount,
           retryAfterSec,
         },
