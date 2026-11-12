@@ -93,6 +93,57 @@ export async function createEditSession(): Promise<string> {
   return token;
 }
 
+/**
+ * Long-lived marker for a device that has entered the correct PIN before.
+ * It grants no edit access by itself; it only gives that device its own
+ * guess bucket, so a stranger tripping the global lockout can't block it.
+ */
+export const DEVICE_COOKIE = "ff_device";
+const DEVICE_DAYS = 365;
+const MAX_DEVICES = 50;
+const TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,128}$/;
+
+export function buildDeviceCookie(token: string, secure: boolean): string {
+  return `${DEVICE_COOKIE}=${token}; ${cookieExtras(secure, DEVICE_DAYS * 24 * 60 * 60)}`;
+}
+
+/** Hash of the request's trusted-device token, or null if it isn't valid. */
+export async function trustedDeviceHash(
+  request: Request,
+): Promise<string | null> {
+  const token = readCookie(request, DEVICE_COOKIE);
+  if (!token || !TOKEN_PATTERN.test(token)) return null;
+  const hash = hashToken(token);
+  const rows = await sql<{ ok: number }>(
+    `select 1 as ok from trusted_devices
+     where token_hash = $1 and expires_at > now()
+     limit 1`,
+    [hash],
+  );
+  return rows.length > 0 ? hash : null;
+}
+
+/** Issue a new trusted-device token (keeping at most MAX_DEVICES). */
+export async function createTrustedDevice(): Promise<string> {
+  await sql(`delete from trusted_devices where expires_at < now()`);
+  await sql(
+    `delete from trusted_devices
+     where token_hash in (
+       select token_hash from trusted_devices
+       order by expires_at desc
+       offset $1
+     )`,
+    [MAX_DEVICES - 1],
+  );
+  const token = randomBytes(32).toString("base64url");
+  await sql(
+    `insert into trusted_devices (token_hash, expires_at)
+     values ($1, now() + ($2 * interval '1 day'))`,
+    [hashToken(token), DEVICE_DAYS],
+  );
+  return token;
+}
+
 export async function revokeEditSession(request: Request): Promise<void> {
   const token = readCookie(request, EDIT_COOKIE);
   if (!token) return;
@@ -104,7 +155,7 @@ export async function revokeEditSession(request: Request): Promise<void> {
 export async function isEditUnlocked(request: Request): Promise<boolean> {
   if (!pinConfigured()) return false;
   const token = readCookie(request, EDIT_COOKIE);
-  if (!token || !/^[A-Za-z0-9_-]{20,128}$/.test(token)) return false;
+  if (!token || !TOKEN_PATTERN.test(token)) return false;
   const rows = await sql<{ ok: number }>(
     `select 1 as ok from edit_sessions
      where token_hash = $1 and expires_at > now()

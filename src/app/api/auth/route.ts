@@ -2,16 +2,19 @@ import { NextResponse } from "next/server";
 import {
   assertSameOrigin,
   buildAuthCookie,
+  buildDeviceCookie,
   clearAuthCookie,
   createEditSession,
+  createTrustedDevice,
   isEditUnlocked,
   pinConfigured,
   pinsMatch,
   readSmallJson,
   requestIsSecure,
   revokeEditSession,
+  trustedDeviceHash,
 } from "@/lib/edit-auth";
-import { applyPinGuess } from "@/lib/pin-rate-limit";
+import { applyPinGuess, applyTrustedDeviceGuess } from "@/lib/pin-rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -54,8 +57,10 @@ export async function POST(request: Request) {
   try {
     const pinOk = pinsMatch(body.pin);
 
-    // One transactional step under an advisory lock: count, refuse, or unlock.
-    const result = await applyPinGuess(pinOk);
+    const deviceHash = await trustedDeviceHash(request);
+    const result = deviceHash
+      ? await applyTrustedDeviceGuess(deviceHash, pinOk)
+      : await applyPinGuess(pinOk);
 
     if (result.status === "locked") {
       // Hard refuse — no long sleep holding the connection open for attackers.
@@ -82,13 +87,18 @@ export async function POST(request: Request) {
       );
     }
 
+    const secure = requestIsSecure(request);
     const token = await createEditSession();
+    const deviceToken = deviceHash ? null : await createTrustedDevice();
     return withCookies(
       NextResponse.json({
         unlocked: true,
         configured: true,
       }),
-      [buildAuthCookie(token, requestIsSecure(request))],
+      [
+        buildAuthCookie(token, secure),
+        deviceToken && buildDeviceCookie(deviceToken, secure),
+      ],
     );
   } catch {
     return NextResponse.json({ error: "Could not unlock" }, { status: 400 });

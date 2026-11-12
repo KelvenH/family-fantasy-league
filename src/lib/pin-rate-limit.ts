@@ -35,8 +35,9 @@ function lockMinutesFor(lockouts: number): number {
  *   hours, so pacing guesses under the cap yields at most a few per day.
  * - Each lockout doubles the wait (capped at an hour), limiting a 6-digit PIN
  *   to roughly 120 guesses a day.
- * - A lockout only affects new unlocks: devices that already entered the PIN
- *   keep their 90-day edit session, so strangers cannot lock the family out.
+ * - This bucket only applies to devices that have never unlocked. Family
+ *   devices keep their 90-day session and use their own trusted-device bucket
+ *   (see applyTrustedDeviceGuess), so strangers cannot lock the family out.
  */
 export async function applyPinGuess(pinOk: boolean): Promise<PinGuessResult> {
   return withTransaction(async (query) => {
@@ -116,6 +117,73 @@ export async function applyPinGuess(pinOk: boolean): Promise<PinGuessResult> {
        set failures = $2, lockouts = $3, window_start = now()
        where id = $1`,
       [ATTEMPT_ID, failures, row.lockouts],
+    );
+    return { status: "rejected", attemptCount: failures };
+  });
+}
+
+const DEVICE_LOCK_MINUTES = 15;
+
+/**
+ * Guess bucket for a trusted device (one that unlocked before). Only someone
+ * who already knew the PIN holds such a token, so its own 5-guess cap keeps
+ * typos safe without touching the global lockout.
+ */
+export async function applyTrustedDeviceGuess(
+  tokenHash: string,
+  pinOk: boolean,
+): Promise<PinGuessResult> {
+  return withTransaction(async (query) => {
+    const rows = await query<{
+      failures: number;
+      locked_until: string | Date | null;
+    }>(
+      `select failures, locked_until from trusted_devices
+       where token_hash = $1
+       for update`,
+      [tokenHash],
+    );
+    const row = rows[0];
+    if (!row) return { status: "rejected", attemptCount: 0 };
+
+    const remaining = asTime(row.locked_until) - Date.now();
+    if (remaining > 0) {
+      return {
+        status: "locked",
+        retryAfterSec: Math.ceil(remaining / 1000),
+        attemptCount: row.failures,
+      };
+    }
+
+    if (pinOk) {
+      await query(
+        `update trusted_devices
+         set failures = 0, locked_until = null
+         where token_hash = $1`,
+        [tokenHash],
+      );
+      return { status: "unlocked" };
+    }
+
+    const failures = row.failures + 1;
+    if (failures >= MAX_ATTEMPTS) {
+      await query(
+        `update trusted_devices
+         set failures = 0,
+             locked_until = now() + ($2 * interval '1 minute')
+         where token_hash = $1`,
+        [tokenHash, DEVICE_LOCK_MINUTES],
+      );
+      return {
+        status: "locked",
+        retryAfterSec: DEVICE_LOCK_MINUTES * 60,
+        attemptCount: failures,
+      };
+    }
+
+    await query(
+      `update trusted_devices set failures = $2 where token_hash = $1`,
+      [tokenHash, failures],
     );
     return { status: "rejected", attemptCount: failures };
   });
