@@ -5,8 +5,8 @@ import {
   clearAuthCookie,
   createEditSession,
   isEditUnlocked,
-  passphrasesMatch,
   pinConfigured,
+  pinsMatch,
   requestIsSecure,
   revokeEditSession,
 } from "@/lib/edit-auth";
@@ -24,10 +24,6 @@ function withCookies(
   return response;
 }
 
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export async function GET(request: Request) {
   return NextResponse.json({
     unlocked: await isEditUnlocked(request),
@@ -43,7 +39,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "Editing is not configured yet. Set EDIT_PIN in Cursor Secrets to a 12+ character family password (letters plus a number or symbol).",
+          "Editing is not configured yet. Add a 6–8 digit EDIT_PIN in Cursor Secrets.",
       },
       { status: 503 },
     );
@@ -51,25 +47,34 @@ export async function POST(request: Request) {
 
   try {
     const body = (await request.json()) as { pin?: unknown; password?: unknown };
-    const submitted = body.password ?? body.pin;
-    const ok = passphrasesMatch(submitted);
+    const submitted = body.pin ?? body.password;
+    const pinOk = pinsMatch(submitted);
 
-    // Single transactional counter update — no separate lockout pre-check.
-    const result = await applyPinGuess(ok);
+    // One transactional step under an advisory lock: count, refuse, or unlock.
+    const result = await applyPinGuess(pinOk);
 
-    if (result.status === "rejected") {
-      await delay(result.delayMs);
-      const retryAfterSec = Math.max(1, Math.ceil(result.delayMs / 1000));
+    if (result.status === "locked") {
+      // Hard refuse — no long sleep holding the connection open for attackers.
       return NextResponse.json(
         {
-          error: "Wrong family password. Try again.",
+          error: `Too many wrong PINs. Try again in ${result.retryAfterSec} seconds.`,
+          retryAfterSec: result.retryAfterSec,
           attemptCount: result.attemptCount,
-          retryAfterSec,
         },
         {
-          status: 401,
-          headers: { "Retry-After": String(retryAfterSec) },
+          status: 429,
+          headers: { "Retry-After": String(result.retryAfterSec) },
         },
+      );
+    }
+
+    if (result.status === "rejected") {
+      return NextResponse.json(
+        {
+          error: "Wrong PIN. Try again.",
+          attemptCount: result.attemptCount,
+        },
+        { status: 401 },
       );
     }
 

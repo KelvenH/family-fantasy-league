@@ -11,7 +11,7 @@ import {
 type Props = {
   children: ReactNode;
   title?: string;
-  /** Shown while locked so pages can stay readable without a password. */
+  /** Shown while locked so pages can stay readable without a PIN. */
   lockedFallback?: ReactNode;
 };
 
@@ -22,11 +22,11 @@ type AuthState = {
 
 export function EditUnlock({
   children,
-  title = "Enter the family password to edit",
+  title = "Enter the family PIN to edit",
   lockedFallback,
 }: Props) {
   const [auth, setAuth] = useState<AuthState | null>(null);
-  const [password, setPassword] = useState("");
+  const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [pending, startTransition] = useTransition();
 
@@ -55,14 +55,14 @@ export function EditUnlock({
           method: "POST",
           credentials: "same-origin",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ password }),
+          body: JSON.stringify({ pin }),
         });
         const data = (await res.json()) as AuthState & { error?: string };
         if (!res.ok || !data.unlocked) {
-          throw new Error(data.error || "Wrong family password. Try again.");
+          throw new Error(data.error || "Wrong PIN. Try again.");
         }
         setAuth({ unlocked: true, configured: true });
-        setPassword("");
+        setPin("");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not unlock");
       }
@@ -96,34 +96,35 @@ export function EditUnlock({
         <div className="pin-gate">
           <h2 className="pin-title">{title}</h2>
           <p className="lede">
-            Viewing stays open. Edits need the shared family password — no
-            email or account.
+            Viewing stays open. Edits need the shared family PIN — no email or
+            account.
           </p>
           {!auth.configured ? (
             <p className="waiting">
-              Editing is not set up yet. In Cursor Secrets, set EDIT_PIN to a
-              12+ character password with letters plus a number or symbol, then
-              reopen the app.
+              Editing is not set up yet. Add a 6–8 digit EDIT_PIN in Cursor
+              Secrets, then reopen the app.
             </p>
           ) : (
             <form className="pin-form" onSubmit={unlock}>
-              <label htmlFor="family-password">Family password</label>
+              <label htmlFor="family-pin">Family PIN</label>
               <input
-                id="family-password"
-                className="pts-input"
-                type="password"
-                autoComplete="current-password"
-                minLength={12}
-                maxLength={64}
-                value={password}
+                id="family-pin"
+                className="pts-input pin-input"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{6,8}"
+                maxLength={8}
+                value={pin}
                 disabled={pending}
-                onChange={(event) => setPassword(event.target.value.slice(0, 64))}
-                placeholder="At least 12 characters"
+                onChange={(event) =>
+                  setPin(event.target.value.replace(/\D/g, "").slice(0, 8))
+                }
+                placeholder="6–8 digits"
               />
               <button
                 className="btn"
                 type="submit"
-                disabled={pending || password.trim().length < 12}
+                disabled={pending || pin.length < 6}
               >
                 {pending ? "Checking…" : "Unlock edits"}
               </button>

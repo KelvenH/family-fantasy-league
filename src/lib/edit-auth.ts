@@ -3,28 +3,19 @@ import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 
 export const EDIT_COOKIE = "ff_edit";
-/** Public apps need a long shared password — short digit PINs fail security review. */
-export const MIN_PASS_LEN = 12;
-export const MAX_PASS_LEN = 64;
+/** Simple family PIN: 6–8 digits. Brute force is blocked by hard server-side rate limits. */
+export const PIN_PATTERN = /^\d{6,8}$/;
 const MAX_SESSIONS = 100;
 const SESSION_HOURS = 12;
 
-export function isValidPassphrase(value: string): boolean {
-  if (value.length < MIN_PASS_LEN || value.length > MAX_PASS_LEN) return false;
-  if (!/^[\x20-\x7E]+$/.test(value)) return false;
-  const hasLetter = /[A-Za-z]/.test(value);
-  const hasDigitOrSymbol = /[0-9]|[^A-Za-z0-9 ]/.test(value);
-  return hasLetter && hasDigitOrSymbol;
-}
-
-export function getExpectedPassphrase(): string | null {
+export function getExpectedPin(): string | null {
   const fromEnv = process.env.EDIT_PIN?.trim();
-  if (fromEnv && isValidPassphrase(fromEnv)) return fromEnv;
+  if (fromEnv && PIN_PATTERN.test(fromEnv)) return fromEnv;
   return null;
 }
 
 export function pinConfigured(): boolean {
-  return getExpectedPassphrase() !== null;
+  return getExpectedPin() !== null;
 }
 
 function hashToken(token: string): string {
@@ -86,7 +77,7 @@ async function pruneSessions(): Promise<void> {
   );
 }
 
-/** Opaque random session — not derived from the password. */
+/** Opaque random session — not derived from the PIN. */
 export async function createEditSession(): Promise<string> {
   await pruneSessions();
   const token = randomBytes(32).toString("base64url");
@@ -119,21 +110,16 @@ export async function isEditUnlocked(request: Request): Promise<boolean> {
   return rows.length > 0;
 }
 
-export function passphrasesMatch(submitted: unknown): boolean {
-  const expected = getExpectedPassphrase();
+export function pinsMatch(submitted: unknown): boolean {
+  const expected = getExpectedPin();
   if (!expected) return false;
   if (typeof submitted !== "string") return false;
-  const value = submitted.trim();
-  if (!isValidPassphrase(value)) return false;
-  const a = Buffer.from(value, "utf8");
+  const pin = submitted.trim();
+  if (!PIN_PATTERN.test(pin)) return false;
+  const a = Buffer.from(pin, "utf8");
   const b = Buffer.from(expected, "utf8");
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
-}
-
-/** @deprecated use passphrasesMatch */
-export function pinsMatch(submitted: unknown): boolean {
-  return passphrasesMatch(submitted);
 }
 
 export function assertSameOrigin(request: Request): Response | null {
@@ -164,7 +150,7 @@ export async function requireEditAuth(
   }
   if (await isEditUnlocked(request)) return null;
   return NextResponse.json(
-    { error: "Enter the family password to edit" },
+    { error: "Enter the family PIN to edit" },
     { status: 401 },
   );
 }
