@@ -10,7 +10,7 @@ import {
   requestIsSecure,
   revokeEditSession,
 } from "@/lib/edit-auth";
-import { applyPinGuess, FAIL_DELAY_MS } from "@/lib/pin-rate-limit";
+import { applyPinGuess } from "@/lib/pin-rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -53,32 +53,22 @@ export async function POST(request: Request) {
     const body = (await request.json()) as { pin?: unknown };
     const pinOk = pinsMatch(body.pin);
 
-    // One global transactional step — not keyed on cookies or client IP.
+    // Single transactional counter update — no separate lockout pre-check.
     const result = await applyPinGuess(pinOk);
 
-    if (result.status === "locked") {
-      await delay(FAIL_DELAY_MS);
-      return NextResponse.json(
-        {
-          error: `Too many wrong PINs. Try again in ${result.retryAfterSec} seconds.`,
-          retryAfterSec: result.retryAfterSec,
-          attemptCount: result.attemptCount,
-        },
-        {
-          status: 429,
-          headers: { "Retry-After": String(result.retryAfterSec) },
-        },
-      );
-    }
-
     if (result.status === "rejected") {
-      await delay(FAIL_DELAY_MS);
+      await delay(result.delayMs);
+      const retryAfterSec = Math.max(1, Math.ceil(result.delayMs / 1000));
       return NextResponse.json(
         {
           error: "Wrong PIN. Try again.",
           attemptCount: result.attemptCount,
+          retryAfterSec,
         },
-        { status: 401 },
+        {
+          status: 401,
+          headers: { "Retry-After": String(retryAfterSec) },
+        },
       );
     }
 
