@@ -66,7 +66,7 @@ export function PlayersAdmin({ players: initial }: Props) {
   return (
     <EditUnlock
       title="Enter the family PIN to view and edit players"
-      description="Enter the shared family PIN to view and edit the player data — no email or account needed."
+      description=""
     >
       <p className="lede">
         Change a player&apos;s points, then tap Save. Team totals update from
