@@ -100,11 +100,18 @@ main {
   cursor: pointer;
 }
 
-.nav a.secondary,
+.nav a:not([aria-current="page"]),
 .btn.secondary {
   background: transparent;
   border-color: var(--line);
   color: var(--ink);
+}
+
+.nav a:not([aria-current="page"]):hover,
+.nav a:not([aria-current="page"]):focus-visible {
+  background: var(--panel-2);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .panel {
