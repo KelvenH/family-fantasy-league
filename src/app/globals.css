@@ -308,6 +308,42 @@ tbody tr:hover {
   font-weight: 700;
 }
 
+.pin-gate {
+  margin-top: 0.5rem;
+}
+
+.pin-title {
+  font-size: 1.35rem;
+}
+
+.pin-form {
+  display: grid;
+  gap: 0.65rem;
+  max-width: 18rem;
+  margin-bottom: 0.75rem;
+}
+
+.pin-form label {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.pin-input {
+  letter-spacing: 0.28em;
+  font-size: 1.35rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.pin-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
 @media (max-width: 720px) {
   html,
   body {
