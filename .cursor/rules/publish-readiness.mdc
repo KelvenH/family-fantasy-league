@@ -1,0 +1,35 @@
+---
+description: Fix security review findings and merge before asking to publish
+alwaysApply: true
+---
+
+# Publishing this app
+
+This app is shared **Public** (no sign-in) so family can open it from a link.
+Every publish must pass Cursor's security review as a public app.
+
+## Before asking Kelven to publish
+
+1. Self-review every shipped file against the review classes (missing auth,
+   CSRF, XSS, injection, data exposure, resource exhaustion, insecure
+   defaults, secret logging). Fix every finding, including low severity.
+2. Build and run locally; exercise the PIN gate (wrong guesses lock out with
+   429, the correct PIN is also refused while locked).
+3. Commit, open a PR, **merge to `main`**, and pull `main`.
+4. Only then call `publish-app` from `main`. Never ask Kelven to publish a
+   branch build or before the merge.
+5. If a publish reports review notes, fix them all in the same way before the
+   next request — don't hand the notes back as optional.
+
+## Edit access model — keep it simple
+
+- Viewing is open; only writes need edit access.
+- Edit access is a short shared family PIN (`EDIT_PIN`, 6–8 digits, Apps
+  Secrets). Do not switch to a long password or accounts unless no PIN-based
+  fix can pass review.
+- Brute force is stopped server-side: one global attempt counter, 5 wrong
+  guesses then a lockout that doubles each time (cap 1 hour), and every guess
+  is refused while locked.
+- Every write route: `requireEditAuth`, same-origin check, small JSON body,
+  bounded inputs, generic error messages.
+- Keep security headers in `next.config.ts` (framing blocked, nosniff, HSTS).
