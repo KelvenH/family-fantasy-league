@@ -3,6 +3,19 @@ import { getMeta, listStandings } from "@/lib/league";
 
 export const dynamic = "force-dynamic";
 
+function formatEditDate(iso: string | undefined): string {
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return "none yet";
+  return date.toLocaleString("en-GB", {
+    timeZone: "Europe/London",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export default async function HomePage() {
   const [standings, meta] = await Promise.all([listStandings(), getMeta()]);
   const waiting = meta.status === "waiting_for_data" || standings.length === 0;
@@ -22,12 +35,10 @@ export default async function HomePage() {
         </div>
       ) : null}
 
-      {meta.exported_at ? (
-        <p className="meta">Seeded from export {meta.exported_at}</p>
-      ) : null}
-      {meta.catalogue_note ? (
-        <p className="meta">{meta.catalogue_note}</p>
-      ) : null}
+      <p className="meta">Prices were as at 22nd Sept 2026.</p>
+      <p className="meta">
+        Last edit to points: {formatEditDate(meta.last_points_edit)}
+      </p>
 
       <div className="table-wrap">
         <table>

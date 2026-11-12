@@ -154,6 +154,11 @@ export async function updatePlayerPts(
   );
   const row = rows[0];
   if (!row) return null;
+  await sql(
+    `insert into app_meta (key, value) values ('last_points_edit', $1)
+     on conflict (key) do update set value = excluded.value`,
+    [new Date().toISOString()],
+  );
   return {
     id: row.id,
     name: row.name,
