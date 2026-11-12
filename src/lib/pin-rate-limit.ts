@@ -11,19 +11,18 @@ export type PinGuessResult =
   | { status: "rejected"; attemptCount: number; delayMs: number };
 
 function delayForFailures(failures: number): number {
-  // Progressive backoff; no multi-minute hard lockout that blocks the family.
-  const capped = Math.min(Math.max(failures, 1), 10);
-  return Math.min(30_000, 250 * 2 ** (capped - 1));
+  // Progressive backoff up to 60s; no hard lockout that blocks a correct password.
+  const capped = Math.min(Math.max(failures, 1), 12);
+  return Math.min(60_000, 500 * 2 ** (capped - 1));
 }
 
 /**
- * Record a PIN guess in a single transactional UPDATE under an advisory lock.
- * There is no separate pre-check step: success resets and failure increments
- * in the same statement, so concurrent requests cannot bypass the counter.
+ * Record a password guess in a single transactional UPDATE under an advisory lock.
+ * Success resets and failure increments in the same statement — no separate
+ * check/record race, and concurrent requests cannot bypass the counter.
  */
 export async function applyPinGuess(pinOk: boolean): Promise<PinGuessResult> {
   return withTransaction(async (query) => {
-    // Serialize all PIN attempts app-wide for the duration of this transaction.
     await query(`select pg_advisory_xact_lock(87231401)`);
 
     await query(
