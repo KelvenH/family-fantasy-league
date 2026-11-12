@@ -179,29 +179,24 @@ export function pinsMatch(submitted: unknown): boolean {
 
 const MAX_BODY_BYTES = 4096;
 
+/** Sent by the app's own fetches; other sites can't add it without CORS. */
+export const WRITE_HEADER = "x-family-league";
+
 /**
- * Writes must come from this app's own pages: browsers always send Origin on
- * POST/PATCH/DELETE, so a missing or foreign Origin is refused.
+ * Writes must come from this app's own pages. The host proxy rewrites Host,
+ * so compare nothing against it: refuse browsers that report a cross-site
+ * request, and require the custom header, which forms and cross-origin
+ * fetches cannot send (no CORS is allowed).
  */
 export function assertSameOrigin(request: Request): Response | null {
-  const forbidden = () =>
-    NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  const origin = request.headers.get("origin");
-  if (!origin) {
-    return request.headers.get("sec-fetch-site") === "same-origin"
-      ? null
-      : forbidden();
+  const site = request.headers.get("sec-fetch-site");
+  if (
+    (site !== null && site !== "same-origin") ||
+    request.headers.get(WRITE_HEADER) !== "1"
+  ) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  const hosts = [
-    request.headers.get("x-forwarded-host")?.split(",")[0]?.trim(),
-    request.headers.get("host"),
-    new URL(request.url).host,
-  ].filter(Boolean);
-  try {
-    return hosts.includes(new URL(origin).host) ? null : forbidden();
-  } catch {
-    return forbidden();
-  }
+  return null;
 }
 
 /**

@@ -54,7 +54,10 @@ export function EditUnlock({
         const res = await fetch("/api/auth", {
           method: "POST",
           credentials: "same-origin",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            "x-family-league": "1",
+          },
           body: JSON.stringify({ pin }),
         });
         const data = (await res.json()) as AuthState & { error?: string };
@@ -76,6 +79,7 @@ export function EditUnlock({
         const res = await fetch("/api/auth", {
           method: "DELETE",
           credentials: "same-origin",
+          headers: { "x-family-league": "1" },
         });
         const data = (await res.json()) as AuthState;
         setAuth({ unlocked: false, configured: data.configured });

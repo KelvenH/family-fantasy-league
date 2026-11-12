@@ -11,7 +11,9 @@ type Props = {
 export function PlayersAdmin({ players: initial }: Props) {
   const [players, setPlayers] = useState(initial);
   const [drafts, setDrafts] = useState<Record<number, string>>(() =>
-    Object.fromEntries(initial.map((player) => [player.id, String(player.pts)])),
+    Object.fromEntries(
+      initial.map((player) => [player.id, String(player.pts)]),
+    ),
   );
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -32,7 +34,10 @@ export function PlayersAdmin({ players: initial }: Props) {
         const res = await fetch("/api/players", {
           method: "PATCH",
           credentials: "same-origin",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            "x-family-league": "1",
+          },
           body: JSON.stringify({ playerId, pts }),
         });
         const data = (await res.json()) as {
@@ -68,7 +73,10 @@ export function PlayersAdmin({ players: initial }: Props) {
         {pending ? "Saving…" : error || message}
       </div>
 
-      <div className="player-row" style={{ color: "var(--muted)", fontSize: "0.92rem" }}>
+      <div
+        className="player-row"
+        style={{ color: "var(--muted)", fontSize: "0.92rem" }}
+      >
         <div>Player</div>
         <div className="hide-sm">Pos</div>
         <div className="hide-sm">Club</div>
