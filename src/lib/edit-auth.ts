@@ -122,19 +122,44 @@ export function pinsMatch(submitted: unknown): boolean {
   return timingSafeEqual(a, b);
 }
 
+const MAX_BODY_BYTES = 4096;
+
+/**
+ * Writes must come from this app's own pages: browsers always send Origin on
+ * POST/PATCH/DELETE, so a missing or foreign Origin is refused.
+ */
 export function assertSameOrigin(request: Request): Response | null {
+  const forbidden = () =>
+    NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const origin = request.headers.get("origin");
-  if (!origin) return null;
-  const host = request.headers.get("host");
-  if (!host) return null;
-  try {
-    if (new URL(origin).host !== host) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-  } catch {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!origin) {
+    return request.headers.get("sec-fetch-site") === "same-origin"
+      ? null
+      : forbidden();
   }
-  return null;
+  const hosts = [
+    request.headers.get("x-forwarded-host")?.split(",")[0]?.trim(),
+    request.headers.get("host"),
+    new URL(request.url).host,
+  ].filter(Boolean);
+  try {
+    return hosts.includes(new URL(origin).host) ? null : forbidden();
+  } catch {
+    return forbidden();
+  }
+}
+
+/** Parse a small JSON body; returns null when missing, oversized, or invalid. */
+export async function readSmallJson<T>(request: Request): Promise<T | null> {
+  const declared = Number(request.headers.get("content-length") ?? 0);
+  if (declared > MAX_BODY_BYTES) return null;
+  try {
+    const text = await request.text();
+    if (text.length > MAX_BODY_BYTES) return null;
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
 }
 
 export async function requireEditAuth(

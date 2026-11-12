@@ -7,6 +7,7 @@ import {
   isEditUnlocked,
   pinConfigured,
   pinsMatch,
+  readSmallJson,
   requestIsSecure,
   revokeEditSession,
 } from "@/lib/edit-auth";
@@ -45,10 +46,13 @@ export async function POST(request: Request) {
     );
   }
 
+  const body = await readSmallJson<{ pin?: unknown }>(request);
+  if (!body) {
+    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+  }
+
   try {
-    const body = (await request.json()) as { pin?: unknown; password?: unknown };
-    const submitted = body.pin ?? body.password;
-    const pinOk = pinsMatch(submitted);
+    const pinOk = pinsMatch(body.pin);
 
     // One transactional step under an advisory lock: count, refuse, or unlock.
     const result = await applyPinGuess(pinOk);

@@ -130,6 +130,9 @@ export async function listPlayersByPos(pos: string): Promise<Player[]> {
   return players.filter((player) => player.pos === pos);
 }
 
+/** Validation failure whose message is safe to show to the visitor. */
+export class LeagueInputError extends Error {}
+
 export async function updatePlayerPts(
   playerId: number,
   pts: number,
@@ -188,7 +191,7 @@ export async function updateTeamSlot(
     );
     const player = players[0];
     if (!player) {
-      throw new Error("Player not found");
+      throw new LeagueInputError("Player not found");
     }
     // Allow keeping an existing off-position pick; new picks must match the slot.
     const existing = await sql<{ player_id: number | null }>(
@@ -197,7 +200,7 @@ export async function updateTeamSlot(
     );
     const keepingCurrent = existing[0]?.player_id === playerId;
     if (!keepingCurrent && player.pos !== slot.slot_pos) {
-      throw new Error(
+      throw new LeagueInputError(
         `Player position ${player.pos} does not match slot ${slot.slot_pos}`,
       );
     }
