@@ -8,6 +8,7 @@ const ATTEMPT_ID = "global";
 const MAX_ATTEMPTS = 5;
 const BASE_LOCK_MINUTES = 5;
 const MAX_LOCK_MINUTES = 60;
+const QUIET_RESET_HOURS = 24;
 
 export type PinGuessResult =
   | { status: "unlocked" }
@@ -30,10 +31,12 @@ function lockMinutesFor(lockouts: number): number {
  *
  * - While locked, every guess is refused (429) — including the correct PIN —
  *   so guessing cannot continue during a lockout.
- * - Failures never expire on their own; only a correct PIN resets them, so an
- *   attacker cannot pace guesses under the cap.
+ * - Failures and lockout escalation reset after a correct PIN or 24 quiet
+ *   hours, so pacing guesses under the cap yields at most a few per day.
  * - Each lockout doubles the wait (capped at an hour), limiting a 6-digit PIN
- *   to roughly 120 guesses a day. Existing edit sessions keep working.
+ *   to roughly 120 guesses a day.
+ * - A lockout only affects new unlocks: devices that already entered the PIN
+ *   keep their 90-day edit session, so strangers cannot lock the family out.
  */
 export async function applyPinGuess(pinOk: boolean): Promise<PinGuessResult> {
   return withTransaction(async (query) => {
@@ -50,13 +53,27 @@ export async function applyPinGuess(pinOk: boolean): Promise<PinGuessResult> {
       failures: number;
       lockouts: number;
       locked_until: string | Date | null;
+      window_start: string | Date | null;
     }>(
-      `select failures, lockouts, locked_until from pin_lockout where id = $1`,
+      `select failures, lockouts, locked_until, window_start
+       from pin_lockout where id = $1`,
       [ATTEMPT_ID],
     );
-    const row = rows[0] ?? { failures: 0, lockouts: 0, locked_until: null };
+    const row = rows[0] ?? {
+      failures: 0,
+      lockouts: 0,
+      locked_until: null,
+      window_start: null,
+    };
 
     const remaining = asTime(row.locked_until) - Date.now();
+    if (
+      remaining <= 0 &&
+      Date.now() - asTime(row.window_start) > QUIET_RESET_HOURS * 3600_000
+    ) {
+      row.failures = 0;
+      row.lockouts = 0;
+    }
     if (remaining > 0) {
       return {
         status: "locked",
@@ -81,11 +98,11 @@ export async function applyPinGuess(pinOk: boolean): Promise<PinGuessResult> {
       await query(
         `update pin_lockout
          set failures = 0,
-             lockouts = lockouts + 1,
+             lockouts = $3,
              locked_until = now() + ($2 * interval '1 minute'),
              window_start = now()
          where id = $1`,
-        [ATTEMPT_ID, minutes],
+        [ATTEMPT_ID, minutes, row.lockouts + 1],
       );
       return {
         status: "locked",
@@ -94,10 +111,12 @@ export async function applyPinGuess(pinOk: boolean): Promise<PinGuessResult> {
       };
     }
 
-    await query(`update pin_lockout set failures = $2 where id = $1`, [
-      ATTEMPT_ID,
-      failures,
-    ]);
+    await query(
+      `update pin_lockout
+       set failures = $2, lockouts = $3, window_start = now()
+       where id = $1`,
+      [ATTEMPT_ID, failures, row.lockouts],
+    );
     return { status: "rejected", attemptCount: failures };
   });
 }

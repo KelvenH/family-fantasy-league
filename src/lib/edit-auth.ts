@@ -6,7 +6,11 @@ export const EDIT_COOKIE = "ff_edit";
 /** Simple family PIN: 6–8 digits. Brute force is blocked by hard server-side rate limits. */
 export const PIN_PATTERN = /^\d{6,8}$/;
 const MAX_SESSIONS = 100;
-const SESSION_HOURS = 12;
+/**
+ * Family devices stay unlocked for 90 days, so a stranger tripping the global
+ * PIN lockout cannot block people who have already unlocked. "Lock" revokes.
+ */
+const SESSION_DAYS = 90;
 
 export function getExpectedPin(): string | null {
   const fromEnv = process.env.EDIT_PIN?.trim();
@@ -41,7 +45,7 @@ function cookieExtras(secure: boolean, maxAgeSec: number): string {
 }
 
 export function buildAuthCookie(token: string, secure: boolean): string {
-  return `${EDIT_COOKIE}=${token}; ${cookieExtras(secure, SESSION_HOURS * 60 * 60)}`;
+  return `${EDIT_COOKIE}=${token}; ${cookieExtras(secure, SESSION_DAYS * 24 * 60 * 60)}`;
 }
 
 export function clearAuthCookie(secure: boolean): string {
@@ -83,8 +87,8 @@ export async function createEditSession(): Promise<string> {
   const token = randomBytes(32).toString("base64url");
   await sql(
     `insert into edit_sessions (token_hash, expires_at)
-     values ($1, now() + interval '12 hours')`,
-    [hashToken(token)],
+     values ($1, now() + ($2 * interval '1 day'))`,
+    [hashToken(token), SESSION_DAYS],
   );
   return token;
 }
@@ -149,16 +153,39 @@ export function assertSameOrigin(request: Request): Response | null {
   }
 }
 
-/** Parse a small JSON body; returns null when missing, oversized, or invalid. */
+/**
+ * Parse a small JSON body, streaming it and stopping as soon as it passes
+ * MAX_BODY_BYTES. Returns null when missing, oversized, or invalid.
+ */
 export async function readSmallJson<T>(request: Request): Promise<T | null> {
-  const declared = Number(request.headers.get("content-length") ?? 0);
-  if (declared > MAX_BODY_BYTES) return null;
+  const declared = request.headers.get("content-length");
+  if (declared !== null) {
+    const length = Number(declared);
+    if (!Number.isFinite(length) || length < 0 || length > MAX_BODY_BYTES) {
+      return null;
+    }
+  }
+  if (!request.body) return null;
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
   try {
-    const text = await request.text();
-    if (text.length > MAX_BODY_BYTES) return null;
-    return JSON.parse(text) as T;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
   } catch {
     return null;
+  } finally {
+    reader.releaseLock();
   }
 }
 
