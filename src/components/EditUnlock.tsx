@@ -101,7 +101,7 @@ export function EditUnlock({
         {lockedFallback}
         <div className="pin-gate">
           <h2 className="pin-title">{title}</h2>
-          <p className="lede">{description}</p>
+          {description ? <p className="lede">{description}</p> : null}
           {!auth.configured ? (
             <p className="waiting">
               Editing is not set up yet. Add a 6–8 digit EDIT_PIN in Cursor
