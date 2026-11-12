@@ -30,8 +30,10 @@ Every publish must pass Cursor's security review as a public app.
 - Brute force is stopped server-side: one global attempt counter, 5 wrong
   guesses then a lockout that doubles each time (cap 1 hour), and every guess
   is refused while locked. Escalation resets after 24 quiet hours.
-- Edit sessions last 90 days so a stranger tripping the lockout cannot block
-  family devices that already unlocked.
+- Edit sessions last 90 days, and a device that unlocked once gets a
+  trusted-device cookie with its own guess bucket, so a stranger tripping the
+  global lockout cannot block family devices.
+- No third-party requests from pages (system fonts only; no CDNs/analytics).
 - Once a publish is requested, don't push to `main` until it finishes —
   changing the app mid-review cancels the public review.
 - Every write route: `requireEditAuth`, same-origin check, small JSON body,
