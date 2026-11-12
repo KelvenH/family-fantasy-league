@@ -1,17 +1,22 @@
 import { createHash, randomBytes } from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, withTransaction } from "@/lib/db";
 import { readCookie, requestIsSecure } from "@/lib/edit-auth";
 
 export const RATE_COOKIE = "ff_rl";
 const MAX_ATTEMPTS = 5;
-const GLOBAL_ID = "g:all";
-const GLOBAL_MAX_ATTEMPTS = 60;
+const LOCK_MINUTES = 15;
 const MAX_LOCKOUT_ROWS = 200;
 
 type LockoutRow = {
   failures: number;
+  window_start: string | Date;
   locked_until: string | Date | null;
 };
+
+export type PinGuessResult =
+  | { status: "unlocked" }
+  | { status: "rejected"; attemptCount: number }
+  | { status: "locked"; retryAfterSec: number; attemptCount: number };
 
 function hashId(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
@@ -53,10 +58,8 @@ export function resolveRateClient(request: Request): {
 async function pruneLockoutRows(): Promise<void> {
   await sql(
     `delete from pin_lockout
-     where id <> $1
-       and (locked_until is null or locked_until < now())
+     where (locked_until is null or locked_until < now())
        and window_start < now() - interval '1 day'`,
-    [GLOBAL_ID],
   );
   const countRows = await sql<{ count: string }>(
     `select count(*)::text as count from pin_lockout`,
@@ -67,132 +70,105 @@ async function pruneLockoutRows(): Promise<void> {
     `delete from pin_lockout
      where id in (
        select id from pin_lockout
-       where id <> $1
        order by window_start asc
-       limit $2
+       limit $1
      )`,
-    [GLOBAL_ID, count - MAX_LOCKOUT_ROWS],
+    [count - MAX_LOCKOUT_ROWS],
   );
 }
 
 /**
- * Atomically record a failed PIN guess.
- * Increment + lock happen in one UPDATE so parallel guesses cannot bypass the limit.
+ * Apply a PIN guess in one transaction under a row lock.
+ * Lock check, failure increment, and success reset are not separate steps —
+ * concurrent requests serialize on the same browser bucket.
  */
-async function atomicRecordFailure(
-  id: string,
-  maxAttempts: number,
-  lockMinutes: number,
-): Promise<{ locked: boolean; retryAfterSec: number; attemptCount: number }> {
-  await sql(
-    `insert into pin_lockout (id, failures, window_start, locked_until)
-     values ($1, 0, now(), null)
-     on conflict (id) do nothing`,
-    [id],
-  );
-
-  // failures / window_start / locked_until on the right-hand side are OLD row values,
-  // so concurrent UPDATEs serialize on the row and each guess increments once.
-  const rows = await sql<LockoutRow>(
-    `update pin_lockout set
-       failures = case
-         when locked_until is not null and locked_until > now() then failures
-         when window_start < now() - interval '15 minutes' then 1
-         else failures + 1
-       end,
-       window_start = case
-         when locked_until is not null and locked_until > now() then window_start
-         when window_start < now() - interval '15 minutes' then now()
-         else window_start
-       end,
-       locked_until = case
-         when locked_until is not null and locked_until > now() then locked_until
-         when (
-           case
-             when window_start < now() - interval '15 minutes' then 1
-             else failures + 1
-           end
-         ) >= $2
-           then now() + ($3 * interval '1 minute')
-         else null
-       end
-     where id = $1
-     returning failures, locked_until`,
-    [id, maxAttempts, lockMinutes],
-  );
-
-  const row = rows[0];
-  if (!row) {
-    return { locked: false, retryAfterSec: 0, attemptCount: 0 };
-  }
-  const remaining = asTime(row.locked_until) - Date.now();
-  if (remaining > 0) {
-    return {
-      locked: true,
-      retryAfterSec: Math.ceil(remaining / 1000),
-      attemptCount: row.failures,
-    };
-  }
-  return {
-    locked: false,
-    retryAfterSec: 0,
-    attemptCount: row.failures,
-  };
-}
-
-/** Read-only lock check (soft). Enforcement is atomicRecordFailure. */
-export async function getPinLockout(clientId: string): Promise<
-  { locked: true; retryAfterSec: number } | { locked: false }
-> {
-  const rows = await sql<LockoutRow>(
-    `select failures, locked_until from pin_lockout
-     where (id = $1 or id = $2)
-       and locked_until is not null
-       and locked_until > now()
-     order by locked_until desc
-     limit 1`,
-    [clientId, GLOBAL_ID],
-  );
-  const row = rows[0];
-  if (!row) return { locked: false };
-  const remaining = asTime(row.locked_until) - Date.now();
-  if (remaining > 0) {
-    return { locked: true, retryAfterSec: Math.ceil(remaining / 1000) };
-  }
-  return { locked: false };
-}
-
-export async function recordPinFailure(clientId: string): Promise<{
-  locked: boolean;
-  retryAfterSec: number;
-  attemptCount: number;
-}> {
+export async function applyPinGuess(
+  clientId: string,
+  pinOk: boolean,
+): Promise<PinGuessResult> {
   await pruneLockoutRows();
-  const client = await atomicRecordFailure(clientId, MAX_ATTEMPTS, 15);
-  const global = await atomicRecordFailure(GLOBAL_ID, GLOBAL_MAX_ATTEMPTS, 2);
-  if (client.locked) return client;
-  if (global.locked) {
-    return {
-      locked: true,
-      retryAfterSec: global.retryAfterSec,
-      attemptCount: client.attemptCount,
-    };
-  }
-  return client;
-}
 
-export async function recordPinSuccess(clientId: string): Promise<void> {
-  await sql(
-    `update pin_lockout
-     set failures = 0, window_start = now(), locked_until = null
-     where id = $1`,
-    [clientId],
-  );
+  return withTransaction(async (query) => {
+    await query(
+      `insert into pin_lockout (id, failures, window_start, locked_until)
+       values ($1, 0, now(), null)
+       on conflict (id) do nothing`,
+      [clientId],
+    );
+
+    const rows = await query<LockoutRow>(
+      `select failures, window_start, locked_until
+       from pin_lockout
+       where id = $1
+       for update`,
+      [clientId],
+    );
+    const row = rows[0];
+    if (!row) {
+      return { status: "rejected", attemptCount: 0 };
+    }
+
+    const now = Date.now();
+    const lockedUntil = asTime(row.locked_until);
+    if (lockedUntil > now) {
+      return {
+        status: "locked",
+        retryAfterSec: Math.ceil((lockedUntil - now) / 1000),
+        attemptCount: row.failures,
+      };
+    }
+
+    if (pinOk) {
+      await query(
+        `update pin_lockout
+         set failures = 0, window_start = now(), locked_until = null
+         where id = $1`,
+        [clientId],
+      );
+      return { status: "unlocked" };
+    }
+
+    let failures = row.failures;
+    let windowStart = asTime(row.window_start);
+    if (now - windowStart > 15 * 60 * 1000) {
+      failures = 0;
+      windowStart = now;
+    }
+    failures += 1;
+
+    const shouldLock = failures >= MAX_ATTEMPTS;
+    const nextLock = shouldLock
+      ? new Date(now + LOCK_MINUTES * 60 * 1000).toISOString()
+      : null;
+
+    await query(
+      `update pin_lockout
+       set failures = $2,
+           window_start = $3,
+           locked_until = $4
+       where id = $1`,
+      [
+        clientId,
+        shouldLock ? 0 : failures,
+        new Date(windowStart).toISOString(),
+        nextLock,
+      ],
+    );
+
+    if (shouldLock) {
+      return {
+        status: "locked",
+        retryAfterSec: LOCK_MINUTES * 60,
+        attemptCount: failures,
+      };
+    }
+    return { status: "rejected", attemptCount: failures };
+  });
 }
 
 export function pinAttemptLimits() {
   return {
     maxAttempts: MAX_ATTEMPTS,
-    globalMaxAttempts: GLOBAL_MAX_ATTEMPTS,
+    lockMinutes: LOCK_MINUTES,
   };
 }

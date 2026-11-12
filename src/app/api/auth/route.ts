@@ -10,12 +10,7 @@ import {
   requestIsSecure,
   revokeEditSession,
 } from "@/lib/edit-auth";
-import {
-  getPinLockout,
-  recordPinFailure,
-  recordPinSuccess,
-  resolveRateClient,
-} from "@/lib/pin-rate-limit";
+import { applyPinGuess, resolveRateClient } from "@/lib/pin-rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -52,49 +47,36 @@ export async function POST(request: Request) {
 
   const { clientId, rateCookieToSet } = resolveRateClient(request);
 
-  const lockout = await getPinLockout(clientId);
-  if (lockout.locked) {
-    return withCookies(
-      NextResponse.json(
-        {
-          error: `Too many wrong PINs. Try again in ${lockout.retryAfterSec} seconds.`,
-          retryAfterSec: lockout.retryAfterSec,
-        },
-        {
-          status: 429,
-          headers: { "Retry-After": String(lockout.retryAfterSec) },
-        },
-      ),
-      [rateCookieToSet],
-    );
-  }
-
   try {
     const body = (await request.json()) as { pin?: unknown };
-    if (!pinsMatch(body.pin)) {
-      // Atomic increment+lock — parallel guesses cannot bypass the attempt limit.
-      const failure = await recordPinFailure(clientId);
-      if (failure.locked) {
-        return withCookies(
-          NextResponse.json(
-            {
-              error: `Too many wrong PINs. Try again in ${failure.retryAfterSec} seconds.`,
-              retryAfterSec: failure.retryAfterSec,
-              attemptCount: failure.attemptCount,
-            },
-            {
-              status: 429,
-              headers: { "Retry-After": String(failure.retryAfterSec) },
-            },
-          ),
-          [rateCookieToSet],
-        );
-      }
+    const pinOk = pinsMatch(body.pin);
+
+    // One transactional step: lock row, enforce lockout, count failure or clear.
+    const result = await applyPinGuess(clientId, pinOk);
+
+    if (result.status === "locked") {
+      return withCookies(
+        NextResponse.json(
+          {
+            error: `Too many wrong PINs. Try again in ${result.retryAfterSec} seconds.`,
+            retryAfterSec: result.retryAfterSec,
+            attemptCount: result.attemptCount,
+          },
+          {
+            status: 429,
+            headers: { "Retry-After": String(result.retryAfterSec) },
+          },
+        ),
+        [rateCookieToSet],
+      );
+    }
+
+    if (result.status === "rejected") {
       return withCookies(
         NextResponse.json(
           {
             error: "Wrong PIN. Try again.",
-            attemptCount: failure.attemptCount,
+            attemptCount: result.attemptCount,
           },
           { status: 401 },
         ),
@@ -102,17 +84,13 @@ export async function POST(request: Request) {
       );
     }
 
-    await recordPinSuccess(clientId);
     const token = await createEditSession();
     return withCookies(
       NextResponse.json({
         unlocked: true,
         configured: true,
       }),
-      [
-        buildAuthCookie(token, requestIsSecure(request)),
-        rateCookieToSet,
-      ],
+      [buildAuthCookie(token, requestIsSecure(request)), rateCookieToSet],
     );
   } catch {
     return withCookies(
