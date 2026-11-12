@@ -8,6 +8,12 @@ import {
   pinsMatch,
   requestIsSecure,
 } from "@/lib/edit-auth";
+import {
+  clientAttemptKey,
+  getPinLockout,
+  recordPinFailure,
+  recordPinSuccess,
+} from "@/lib/pin-rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -26,20 +32,54 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "Editing is not configured yet. Add EDIT_PIN in Cursor Secrets.",
+          "Editing is not configured yet. Add a 6–8 digit EDIT_PIN in Cursor Secrets.",
       },
       { status: 503 },
+    );
+  }
+
+  const attemptKey = clientAttemptKey(request);
+  const lockout = getPinLockout(attemptKey);
+  if (lockout.locked) {
+    return NextResponse.json(
+      {
+        error: `Too many wrong PINs. Try again in ${lockout.retryAfterSec} seconds.`,
+        retryAfterSec: lockout.retryAfterSec,
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(lockout.retryAfterSec) },
+      },
     );
   }
 
   try {
     const body = (await request.json()) as { pin?: unknown };
     if (!pinsMatch(body.pin)) {
+      const failure = recordPinFailure(attemptKey);
+      if (failure.locked) {
+        return NextResponse.json(
+          {
+            error: `Too many wrong PINs. Try again in ${failure.retryAfterSec} seconds.`,
+            retryAfterSec: failure.retryAfterSec,
+            attemptCount: failure.attemptCount,
+          },
+          {
+            status: 429,
+            headers: { "Retry-After": String(failure.retryAfterSec) },
+          },
+        );
+      }
       return NextResponse.json(
-        { error: "Wrong PIN. Try again." },
+        {
+          error: "Wrong PIN. Try again.",
+          attemptCount: failure.attemptCount,
+        },
         { status: 401 },
       );
     }
+
+    recordPinSuccess(attemptKey);
 
     const cookie = buildAuthCookie(requestIsSecure(request));
     if (!cookie) {

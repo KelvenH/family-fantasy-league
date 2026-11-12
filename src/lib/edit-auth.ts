@@ -3,10 +3,12 @@ import { NextResponse } from "next/server";
 
 export const EDIT_COOKIE = "ff_edit";
 const TOKEN_PAYLOAD = "family-fantasy-edit-v1";
+/** Public apps need a longer PIN so online guessing is impractical with lockout. */
+export const PIN_PATTERN = /^\d{6,8}$/;
 
 export function getExpectedPin(): string | null {
   const fromEnv = process.env.EDIT_PIN?.trim();
-  if (fromEnv && /^\d{4,8}$/.test(fromEnv)) return fromEnv;
+  if (fromEnv && PIN_PATTERN.test(fromEnv)) return fromEnv;
   return null;
 }
 
@@ -75,7 +77,7 @@ export function pinsMatch(submitted: unknown): boolean {
   if (!expected) return false;
   if (typeof submitted !== "string") return false;
   const pin = submitted.trim();
-  if (!/^\d{4,8}$/.test(pin)) return false;
+  if (!PIN_PATTERN.test(pin)) return false;
   const a = Buffer.from(pin, "utf8");
   const b = Buffer.from(expected, "utf8");
   if (a.length !== b.length) return false;

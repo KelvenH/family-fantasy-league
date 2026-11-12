@@ -101,7 +101,7 @@ export function EditUnlock({
           </p>
           {!auth.configured ? (
             <p className="waiting">
-              Editing is not set up yet. Add a 4–8 digit EDIT_PIN in Cursor
+              Editing is not set up yet. Add a 6–8 digit EDIT_PIN in Cursor
               Secrets, then reopen the app.
             </p>
           ) : (
@@ -112,19 +112,19 @@ export function EditUnlock({
                 className="pts-input pin-input"
                 inputMode="numeric"
                 autoComplete="one-time-code"
-                pattern="[0-9]{4,8}"
+                pattern="[0-9]{6,8}"
                 maxLength={8}
                 value={pin}
                 disabled={pending}
                 onChange={(event) =>
                   setPin(event.target.value.replace(/\D/g, "").slice(0, 8))
                 }
-                placeholder="4–8 digits"
+                placeholder="6–8 digits"
               />
               <button
                 className="btn"
                 type="submit"
-                disabled={pending || pin.length < 4}
+                disabled={pending || pin.length < 6}
               >
                 {pending ? "Checking…" : "Unlock edits"}
               </button>
