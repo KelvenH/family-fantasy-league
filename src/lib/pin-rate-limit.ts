@@ -1,11 +1,12 @@
-import { createHash, randomBytes } from "node:crypto";
-import { sql, withTransaction } from "@/lib/db";
-import { readCookie, requestIsSecure } from "@/lib/edit-auth";
+import { withTransaction } from "@/lib/db";
 
-export const RATE_COOKIE = "ff_rl";
-const MAX_ATTEMPTS = 5;
-const LOCK_MINUTES = 15;
-const MAX_LOCKOUT_ROWS = 200;
+/** Single server-side bucket — not cookie or IP keyed, so clients cannot reset it. */
+const LOCKOUT_ID = "global";
+const MAX_ATTEMPTS = 8;
+const LOCK_MINUTES = 10;
+const WINDOW_MS = 15 * 60 * 1000;
+/** Slow wrong guesses so scripted brute force cannot run at full speed. */
+export const FAIL_DELAY_MS = 400;
 
 type LockoutRow = {
   failures: number;
@@ -18,82 +19,23 @@ export type PinGuessResult =
   | { status: "rejected"; attemptCount: number }
   | { status: "locked"; retryAfterSec: number; attemptCount: number };
 
-function hashId(token: string): string {
-  return createHash("sha256").update(token, "utf8").digest("hex");
-}
-
 function asTime(value: string | Date | null | undefined): number {
   if (!value) return 0;
   return new Date(value).getTime();
 }
 
-function rateCookieHeader(token: string, secure: boolean): string {
-  const parts = [
-    `${RATE_COOKIE}=${token}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    `Max-Age=${30 * 24 * 60 * 60}`,
-  ];
-  if (secure) parts.push("Secure");
-  return parts.join("; ");
-}
-
-/** Server-issued browser id — not taken from X-Forwarded-For. */
-export function resolveRateClient(request: Request): {
-  clientId: string;
-  rateCookieToSet: string | null;
-} {
-  const existing = readCookie(request, RATE_COOKIE);
-  if (existing && /^[A-Za-z0-9_-]{20,128}$/.test(existing)) {
-    return { clientId: `c:${hashId(existing)}`, rateCookieToSet: null };
-  }
-  const token = randomBytes(32).toString("base64url");
-  return {
-    clientId: `c:${hashId(token)}`,
-    rateCookieToSet: rateCookieHeader(token, requestIsSecure(request)),
-  };
-}
-
-async function pruneLockoutRows(): Promise<void> {
-  await sql(
-    `delete from pin_lockout
-     where (locked_until is null or locked_until < now())
-       and window_start < now() - interval '1 day'`,
-  );
-  const countRows = await sql<{ count: string }>(
-    `select count(*)::text as count from pin_lockout`,
-  );
-  const count = Number(countRows[0]?.count ?? 0);
-  if (count <= MAX_LOCKOUT_ROWS) return;
-  await sql(
-    `delete from pin_lockout
-     where id in (
-       select id from pin_lockout
-       order by window_start asc
-       limit $1
-     )`,
-    [count - MAX_LOCKOUT_ROWS],
-  );
-}
-
 /**
- * Apply a PIN guess in one transaction under a row lock.
- * Lock check, failure increment, and success reset are not separate steps —
- * concurrent requests serialize on the same browser bucket.
+ * Apply a PIN guess against the one global lockout row.
+ * Lock check, failure count, and success reset run in one transaction with
+ * SELECT … FOR UPDATE — concurrent requests serialize; no client-controlled key.
  */
-export async function applyPinGuess(
-  clientId: string,
-  pinOk: boolean,
-): Promise<PinGuessResult> {
-  await pruneLockoutRows();
-
+export async function applyPinGuess(pinOk: boolean): Promise<PinGuessResult> {
   return withTransaction(async (query) => {
     await query(
       `insert into pin_lockout (id, failures, window_start, locked_until)
        values ($1, 0, now(), null)
        on conflict (id) do nothing`,
-      [clientId],
+      [LOCKOUT_ID],
     );
 
     const rows = await query<LockoutRow>(
@@ -101,7 +43,7 @@ export async function applyPinGuess(
        from pin_lockout
        where id = $1
        for update`,
-      [clientId],
+      [LOCKOUT_ID],
     );
     const row = rows[0];
     if (!row) {
@@ -110,7 +52,10 @@ export async function applyPinGuess(
 
     const now = Date.now();
     const lockedUntil = asTime(row.locked_until);
-    if (lockedUntil > now) {
+
+    // Wrong guesses while locked stay locked. A correct PIN clears the lockout
+    // so the family is not stuck after an attack wave.
+    if (lockedUntil > now && !pinOk) {
       return {
         status: "locked",
         retryAfterSec: Math.ceil((lockedUntil - now) / 1000),
@@ -123,14 +68,14 @@ export async function applyPinGuess(
         `update pin_lockout
          set failures = 0, window_start = now(), locked_until = null
          where id = $1`,
-        [clientId],
+        [LOCKOUT_ID],
       );
       return { status: "unlocked" };
     }
 
     let failures = row.failures;
     let windowStart = asTime(row.window_start);
-    if (now - windowStart > 15 * 60 * 1000) {
+    if (now - windowStart > WINDOW_MS) {
       failures = 0;
       windowStart = now;
     }
@@ -148,7 +93,7 @@ export async function applyPinGuess(
            locked_until = $4
        where id = $1`,
       [
-        clientId,
+        LOCKOUT_ID,
         shouldLock ? 0 : failures,
         new Date(windowStart).toISOString(),
         nextLock,
@@ -170,5 +115,6 @@ export function pinAttemptLimits() {
   return {
     maxAttempts: MAX_ATTEMPTS,
     lockMinutes: LOCK_MINUTES,
+    windowMs: WINDOW_MS,
   };
 }

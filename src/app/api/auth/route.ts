@@ -10,7 +10,7 @@ import {
   requestIsSecure,
   revokeEditSession,
 } from "@/lib/edit-auth";
-import { applyPinGuess, resolveRateClient } from "@/lib/pin-rate-limit";
+import { applyPinGuess, FAIL_DELAY_MS } from "@/lib/pin-rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +22,10 @@ function withCookies(
     if (cookie) response.headers.append("set-cookie", cookie);
   }
   return response;
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function GET(request: Request) {
@@ -45,42 +49,36 @@ export async function POST(request: Request) {
     );
   }
 
-  const { clientId, rateCookieToSet } = resolveRateClient(request);
-
   try {
     const body = (await request.json()) as { pin?: unknown };
     const pinOk = pinsMatch(body.pin);
 
-    // One transactional step: lock row, enforce lockout, count failure or clear.
-    const result = await applyPinGuess(clientId, pinOk);
+    // One global transactional step — not keyed on cookies or client IP.
+    const result = await applyPinGuess(pinOk);
 
     if (result.status === "locked") {
-      return withCookies(
-        NextResponse.json(
-          {
-            error: `Too many wrong PINs. Try again in ${result.retryAfterSec} seconds.`,
-            retryAfterSec: result.retryAfterSec,
-            attemptCount: result.attemptCount,
-          },
-          {
-            status: 429,
-            headers: { "Retry-After": String(result.retryAfterSec) },
-          },
-        ),
-        [rateCookieToSet],
+      await delay(FAIL_DELAY_MS);
+      return NextResponse.json(
+        {
+          error: `Too many wrong PINs. Try again in ${result.retryAfterSec} seconds.`,
+          retryAfterSec: result.retryAfterSec,
+          attemptCount: result.attemptCount,
+        },
+        {
+          status: 429,
+          headers: { "Retry-After": String(result.retryAfterSec) },
+        },
       );
     }
 
     if (result.status === "rejected") {
-      return withCookies(
-        NextResponse.json(
-          {
-            error: "Wrong PIN. Try again.",
-            attemptCount: result.attemptCount,
-          },
-          { status: 401 },
-        ),
-        [rateCookieToSet],
+      await delay(FAIL_DELAY_MS);
+      return NextResponse.json(
+        {
+          error: "Wrong PIN. Try again.",
+          attemptCount: result.attemptCount,
+        },
+        { status: 401 },
       );
     }
 
@@ -90,13 +88,10 @@ export async function POST(request: Request) {
         unlocked: true,
         configured: true,
       }),
-      [buildAuthCookie(token, requestIsSecure(request)), rateCookieToSet],
+      [buildAuthCookie(token, requestIsSecure(request))],
     );
   } catch {
-    return withCookies(
-      NextResponse.json({ error: "Could not unlock" }, { status: 400 }),
-      [rateCookieToSet],
-    );
+    return NextResponse.json({ error: "Could not unlock" }, { status: 400 });
   }
 }
 
