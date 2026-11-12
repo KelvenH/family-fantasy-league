@@ -35,7 +35,10 @@ export function TeamEditor({ team, players }: Props) {
           {
             method: "PATCH",
             credentials: "same-origin",
-            headers: { "content-type": "application/json" },
+            headers: {
+              "content-type": "application/json",
+              "x-family-league": "1",
+            },
             body: JSON.stringify({
               slotIndex,
               playerId: value === "" ? null : Number(value),
@@ -79,9 +82,7 @@ export function TeamEditor({ team, players }: Props) {
                 <div className="slot-pos">{slot.slotPos}</div>
                 <div className="slot-body">
                   <div className="meta">Pick {slot.slotIndex + 1}</div>
-                  <strong>
-                    {slot.playerName ?? "No player selected"}
-                  </strong>
+                  <strong>{slot.playerName ?? "No player selected"}</strong>
                   <div className="slot-meta">
                     {slot.playerName
                       ? `${slot.club ?? ""} · ${slot.pts ?? 0} pts · £${(slot.price ?? 0).toFixed(1)}m`
