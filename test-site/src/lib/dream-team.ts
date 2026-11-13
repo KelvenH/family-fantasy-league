@@ -3,7 +3,7 @@
  * fixed here — visitors can never change where the server fetches from.
  */
 const DREAM_TEAM_PLAYERS_URL =
-  "https://engagecraft-fantasy-backend-prod.azurewebsites.net/api/players";
+  "https://engagecraft-fantasy-backend-prod.azurewebsites.net/api/players?type=gameweek";
 const TIMEOUT_MS = 15_000;
 const MAX_BYTES = 5 * 1024 * 1024;
 
