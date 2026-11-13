@@ -17,7 +17,7 @@ export default async function PlayersPage() {
       <p className="meta">
         Last edit to points: {formatEditDate(meta.last_points_edit)}
       </p>
-      <PlayersAdmin players={players} />
+      <PlayersAdmin players={players} lastRefresh={meta.last_scores_refresh} />
     </section>
   );
 }

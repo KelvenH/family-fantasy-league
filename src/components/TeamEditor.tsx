@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { EditUnlock } from "@/components/EditUnlock";
 import type { Player, TeamDetail } from "@/lib/types";
@@ -14,6 +15,7 @@ export function TeamEditor({ team, players }: Props) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [pending, startTransition] = useTransition();
+  const router = useRouter();
 
   const byPos = useMemo(() => {
     const map = new Map<string, Player[]>();
@@ -53,6 +55,7 @@ export function TeamEditor({ team, players }: Props) {
           throw new Error(data.error || "Could not update pick");
         }
         setCurrent(data.team);
+        router.refresh();
         setMessage("Pick saved.");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not update pick");
