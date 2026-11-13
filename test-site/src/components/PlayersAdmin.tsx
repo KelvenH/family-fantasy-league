@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { EditUnlock } from "@/components/EditUnlock";
 import { formatEditDate } from "@/lib/format";
@@ -82,6 +83,7 @@ export function PlayersAdmin({ players: initial, lastRefresh: initialRefresh }: 
   const [problem, setProblem] = useState<Problem | null>(null);
   const [busy, setBusy] = useState("");
   const [pending, startTransition] = useTransition();
+  const router = useRouter();
 
   function resetMessages() {
     setMessage("");
@@ -124,6 +126,7 @@ export function PlayersAdmin({ players: initial, lastRefresh: initialRefresh }: 
         const skipped = result.skipped.length
           ? ` Skipped ${result.skipped.join(", ")} because their points were changed by hand after the refresh.`
           : "";
+        router.refresh();
         setMessage(
           `Applied ${result.applied} new score${result.applied === 1 ? "" : "s"}.${skipped}`,
         );
@@ -165,6 +168,7 @@ export function PlayersAdmin({ players: initial, lastRefresh: initialRefresh }: 
         const saved = data.player;
         setPlayers((prev) => prev.map((p) => (p.id === saved.id ? saved : p)));
         setDrafts((prev) => ({ ...prev, [saved.id]: String(saved.pts) }));
+        router.refresh();
         setMessage(`Saved ${saved.name}: ${saved.pts} pts`);
       } catch (err) {
         setProblem({
