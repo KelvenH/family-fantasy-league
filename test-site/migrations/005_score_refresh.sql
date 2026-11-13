@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS score_previews (
+  id TEXT PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  rows JSONB NOT NULL
+);
