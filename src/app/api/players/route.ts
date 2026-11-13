@@ -4,6 +4,7 @@ import { updatePlayerPts } from "@/lib/league";
 
 export const dynamic = "force-dynamic";
 
+const MIN_PTS = -100;
 const MAX_PTS = 10000;
 
 export async function PATCH(request: Request) {
@@ -22,9 +23,9 @@ export async function PATCH(request: Request) {
   if (!Number.isInteger(playerId) || playerId <= 0) {
     return NextResponse.json({ error: "Invalid player" }, { status: 400 });
   }
-  if (!Number.isInteger(pts) || pts < 0 || pts > MAX_PTS) {
+  if (!Number.isInteger(pts) || pts < MIN_PTS || pts > MAX_PTS) {
     return NextResponse.json(
-      { error: `Points must be a whole number from 0 to ${MAX_PTS}` },
+      { error: `Points must be a whole number from ${MIN_PTS} to ${MAX_PTS}` },
       { status: 400 },
     );
   }
